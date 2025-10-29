@@ -7,6 +7,9 @@ on:
     branches:
       - main
 
+env:
+  ECR_REPOSITORY: 'vprofileappimg'
+
 jobs:
   Build:
     runs-on: ubuntu-latest
@@ -74,3 +77,39 @@ jobs:
         with:
           name: trivy-scan-results
           path: trivy-results.json
+
+  Build_and_Publish_Docker_Image:
+    runs-on: ubuntu-latest
+    environment: production
+    needs: [ Build, Test, Security_Scan ] 
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag and push Docker image to ECR
+        env:
+          ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t $ECR_REPOSITORY:$IMAGE_TAG -f Docker-files/app/multistage/Dockerfile .
+          docker tag $ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+      - name: Notify if Docker build fails
+        if: failure()
+        run: echo "Docker build failed, please check the logs."
